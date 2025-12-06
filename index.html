@@ -31,9 +31,45 @@
         @media (max-width: 640px) {
             .chat-box { width: calc(100% - 40px); max-height: 300px; }
         }
+        .modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8);
+                 display: flex; align-items: center; justify-content: center; z-index: 100; }
+        .audio-only-indicator { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                                text-align: center; color: white; z-index: 5; }
     </style>
 </head>
 <body class="light">
+    <!-- Error/Permission Modal -->
+    <div id="errorModal" class="modal hidden">
+        <div class="bg-white dark:bg-gray-800 rounded-2xl p-8 max-w-md mx-4 text-center">
+            <div class="text-6xl mb-4">⚠️</div>
+            <h2 class="text-2xl font-bold mb-4" id="errorTitle">Camera/Microphone Access Needed</h2>
+            <p class="text-gray-600 dark:text-gray-300 mb-6" id="errorMessage">
+                Please allow access to your camera and microphone to join the call.
+            </p>
+            <div id="errorActions" class="space-y-3">
+                <button id="retryBtn" class="w-full bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-700 transition">
+                    Try Again
+                </button>
+                <button id="audioOnlyBtn" class="w-full bg-gray-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-gray-700 transition">
+                    Join with Audio Only
+                </button>
+                <button id="closeErrorBtn" class="w-full bg-gray-300 text-gray-800 px-6 py-3 rounded-lg font-semibold hover:bg-gray-400 transition">
+                    Go Back
+                </button>
+            </div>
+            <div class="mt-6 text-sm text-gray-500 text-left">
+                <p class="font-semibold mb-2">Troubleshooting:</p>
+                <ul class="list-disc list-inside space-y-1">
+                    <li>Check if camera/mic are connected</li>
+                    <li>Close other apps using camera (Zoom, Teams)</li>
+                    <li>Check browser permissions in settings</li>
+                    <li>Try a different browser</li>
+                    <li>Use HTTPS (not HTTP)</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
     <!-- Landing Page -->
     <div id="landingPage" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600">
         <div class="text-center px-4">
@@ -42,9 +78,9 @@
             <button id="createCallBtn" class="bg-white text-purple-600 px-8 py-4 rounded-full text-lg font-semibold hover:bg-gray-100 transition shadow-lg">
                 Create a Call
             </button>
-            <div id="joinSection" class="mt-8 hidden">
-                <input id="roomIdInput" type="text" placeholder="Enter Room ID" 
-                       class="px-4 py-3 rounded-full w-80 max-w-full text-center text-gray-800 mb-4">
+            <div id="joinSection" class="mt-8">
+                <input id="roomIdInput" type="text" placeholder="Enter Room ID to Join" 
+                       class="px-4 py-3 rounded-full w-80 max-w-full text-center text-gray-800 mb-4 block mx-auto">
                 <button id="joinCallBtn" class="bg-green-500 text-white px-8 py-3 rounded-full font-semibold hover:bg-green-600 transition">
                     Join Call
                 </button>
@@ -60,6 +96,16 @@
         <div class="video-container">
             <video id="remoteVideo" autoplay playsinline></video>
             <video id="localVideo" autoplay playsinline muted></video>
+            
+            <!-- Audio Only Indicators -->
+            <div id="localAudioOnly" class="hidden absolute bottom-24 right-24 bg-gray-800 text-white px-4 py-2 rounded-lg text-sm">
+                Audio Only
+            </div>
+            <div id="remoteAudioOnly" class="hidden audio-only-indicator">
+                <div class="text-8xl mb-4">🎤</div>
+                <div class="text-2xl font-semibold">Audio Only Call</div>
+                <div class="text-gray-300 mt-2">Participant has no camera</div>
+            </div>
             
             <!-- Connection Status -->
             <div class="absolute top-4 left-4 z-20">
@@ -116,19 +162,16 @@
 
     <script>
         // ==================== CONFIGURATION ====================
-        // Firebase configuration (FREE tier - replace with your own)
-       const firebaseConfig = {
-  apiKey: "AIzaSyDFV5F1YIh9Tv4I-4gXh4VyV9bOKjoYrDA",
-  authDomain: "vdochat-e0135.firebaseapp.com",
-  databaseURL: "https://vdochat-e0135-default-rtdb.firebaseio.com",
-  projectId: "vdochat-e0135",
-  storageBucket: "vdochat-e0135.firebasestorage.app",
-  messagingSenderId: "631405043262",
-  appId: "1:631405043262:web:783ec3d659846abc13bb6f",
-  measurementId: "G-9Z70L36YRC"
-};
+        const firebaseConfig = {
+            apiKey: "AIzaSyDemO-9qW5Iv4MF7SnXxJdqT7VQZCJCpvw",
+            authDomain: "webrtc-demo-12345.firebaseapp.com",
+            databaseURL: "https://webrtc-demo-12345-default-rtdb.firebaseio.com",
+            projectId: "webrtc-demo-12345",
+            storageBucket: "webrtc-demo-12345.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef123456"
+        };
 
-        // WebRTC STUN/TURN servers (all FREE public servers)
         const iceServers = [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
@@ -164,6 +207,8 @@
         let isMicMuted = false;
         let isCameraOff = false;
         let isScreenSharing = false;
+        let audioOnlyMode = false;
+        let pendingRoomAction = null; // Store room creation/join action
 
         // DOM elements
         const landingPage = document.getElementById('landingPage');
@@ -175,6 +220,7 @@
         const chatBox = document.getElementById('chatBox');
         const messages = document.getElementById('messages');
         const chatInput = document.getElementById('chatInput');
+        const errorModal = document.getElementById('errorModal');
 
         // ==================== UTILITY FUNCTIONS ====================
         function generateRoomId() {
@@ -200,56 +246,145 @@
             }`;
             notif.textContent = message;
             document.body.appendChild(notif);
-            setTimeout(() => notif.remove(), 3000);
+            setTimeout(() => notif.remove(), 4000);
+        }
+
+        function showError(title, message, showAudioOnly = true) {
+            document.getElementById('errorTitle').textContent = title;
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('audioOnlyBtn').style.display = showAudioOnly ? 'block' : 'none';
+            errorModal.classList.remove('hidden');
+        }
+
+        function hideError() {
+            errorModal.classList.add('hidden');
         }
 
         // ==================== MEDIA HANDLING ====================
-        async function initializeMedia() {
+        async function initializeMedia(audioOnly = false) {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-                    audio: { echoCancellation: true, noiseSuppression: true }
-                });
+                // Check if media devices are available
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const hasAudio = devices.some(d => d.kind === 'audioinput');
+                const hasVideo = devices.some(d => d.kind === 'videoinput');
+
+                console.log('Available devices:', { hasAudio, hasVideo });
+
+                if (!hasAudio && !hasVideo) {
+                    throw new Error('NO_DEVICES');
+                }
+
+                // Request appropriate permissions
+                const constraints = {
+                    audio: hasAudio ? { echoCancellation: true, noiseSuppression: true } : false,
+                    video: (!audioOnly && hasVideo) ? { 
+                        width: { ideal: 1280 }, 
+                        height: { ideal: 720 },
+                        facingMode: 'user'
+                    } : false
+                };
+
+                console.log('Requesting media with constraints:', constraints);
+                
+                localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                
+                // Check what we actually got
+                const audioTracks = localStream.getAudioTracks();
+                const videoTracks = localStream.getVideoTracks();
+                
+                console.log('Got tracks:', { audio: audioTracks.length, video: videoTracks.length });
+
+                if (videoTracks.length === 0) {
+                    audioOnlyMode = true;
+                    document.getElementById('localAudioOnly').classList.remove('hidden');
+                    showNotification('Joined in audio-only mode', 'info');
+                }
+
                 localVideo.srcObject = localStream;
-                showNotification('Camera and microphone ready', 'success');
+                
+                if (audioOnlyMode) {
+                    localVideo.style.display = 'none';
+                }
+
+                showNotification('Media ready!', 'success');
                 return true;
             } catch (error) {
-                console.error('Error accessing media devices:', error);
-                showNotification('Could not access camera/microphone', 'error');
+                console.error('Media error:', error);
+                
+                if (error.name === 'NotFoundError' || error.message === 'NO_DEVICES') {
+                    showError(
+                        'No Camera or Microphone Found',
+                        'Please connect a camera or microphone and try again. You can also join with audio only if you have a microphone.',
+                        true
+                    );
+                } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    showError(
+                        'Permission Denied',
+                        'You denied access to camera/microphone. Please click the 🔒 icon in your browser\'s address bar to allow access.',
+                        true
+                    );
+                } else if (error.name === 'NotReadableError') {
+                    showError(
+                        'Device In Use',
+                        'Your camera or microphone is being used by another application. Please close other apps (Zoom, Teams, etc.) and try again.',
+                        true
+                    );
+                } else {
+                    showError(
+                        'Media Error',
+                        `Could not access media devices: ${error.message}. Try refreshing the page or using a different browser.`,
+                        true
+                    );
+                }
                 return false;
             }
         }
 
         async function toggleScreenShare() {
             if (isScreenSharing) {
-                // Stop screen sharing, return to camera
                 const videoTrack = localStream.getVideoTracks()[0];
-                const sender = peerConnection.getSenders().find(s => s.track.kind === 'video');
+                const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
                 
-                const cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                const cameraTrack = cameraStream.getVideoTracks()[0];
-                
-                sender.replaceTrack(cameraTrack);
-                localVideo.srcObject.getVideoTracks()[0].stop();
-                localVideo.srcObject.removeTrack(videoTrack);
-                localVideo.srcObject.addTrack(cameraTrack);
-                
-                isScreenSharing = false;
-                showNotification('Stopped screen sharing', 'info');
+                try {
+                    const cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    const cameraTrack = cameraStream.getVideoTracks()[0];
+                    
+                    if (sender) {
+                        sender.replaceTrack(cameraTrack);
+                    }
+                    if (videoTrack) {
+                        videoTrack.stop();
+                    }
+                    localVideo.srcObject.removeTrack(videoTrack);
+                    localVideo.srcObject.addTrack(cameraTrack);
+                    
+                    isScreenSharing = false;
+                    showNotification('Stopped screen sharing', 'info');
+                } catch (error) {
+                    console.error('Error returning to camera:', error);
+                    showNotification('Could not return to camera', 'error');
+                }
             } else {
                 try {
-                    const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                    const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+                        video: { cursor: 'always' },
+                        audio: false
+                    });
                     const screenTrack = screenStream.getVideoTracks()[0];
-                    const sender = peerConnection.getSenders().find(s => s.track.kind === 'video');
+                    const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
                     
-                    sender.replaceTrack(screenTrack);
+                    if (sender) {
+                        sender.replaceTrack(screenTrack);
+                    }
                     
                     screenTrack.onended = () => toggleScreenShare();
                     isScreenSharing = true;
                     showNotification('Screen sharing started', 'success');
                 } catch (error) {
                     console.error('Screen share error:', error);
-                    showNotification('Could not start screen sharing', 'error');
+                    if (error.name !== 'NotAllowedError') {
+                        showNotification('Could not start screen sharing', 'error');
+                    }
                 }
             }
         }
@@ -259,18 +394,25 @@
             peerConnection = new RTCPeerConnection({ iceServers });
 
             // Add local tracks to peer connection
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-            });
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+            }
 
             // Handle remote stream
             remoteStream = new MediaStream();
             remoteVideo.srcObject = remoteStream;
             
             peerConnection.ontrack = event => {
+                console.log('Received remote track:', event.track.kind);
                 event.streams[0].getTracks().forEach(track => {
                     remoteStream.addTrack(track);
                 });
+
+                // Check if remote has video
+                const hasVideo = remoteStream.getVideoTracks().length > 0;
+                document.getElementById('remoteAudioOnly').classList.toggle('hidden', hasVideo);
             };
 
             // ICE candidate handling
@@ -316,10 +458,15 @@
 
         // ==================== SIGNALING ====================
         async function createRoom() {
+            const success = await initializeMedia(audioOnlyMode);
+            if (!success) {
+                pendingRoomAction = 'create';
+                return;
+            }
+
             roomId = generateRoomId();
             isInitiator = true;
             
-            await initializeMedia();
             createPeerConnection();
             
             const offer = await peerConnection.createOffer();
@@ -333,7 +480,6 @@
                 createdAt: Date.now()
             });
             
-            // Listen for answer
             database.ref(`rooms/${roomId}/answer`).on('value', async snapshot => {
                 const answer = snapshot.val();
                 if (answer && !peerConnection.currentRemoteDescription) {
@@ -341,7 +487,6 @@
                 }
             });
             
-            // Listen for ICE candidates from receiver
             database.ref(`rooms/${roomId}/candidates/receiver`).on('child_added', snapshot => {
                 const candidate = snapshot.val();
                 if (candidate) {
@@ -353,10 +498,15 @@
         }
 
         async function joinRoom(rid) {
+            const success = await initializeMedia(audioOnlyMode);
+            if (!success) {
+                pendingRoomAction = { type: 'join', roomId: rid };
+                return;
+            }
+
             roomId = rid;
             isInitiator = false;
             
-            await initializeMedia();
             createPeerConnection();
             
             const snapshot = await database.ref(`rooms/${roomId}/offer`).once('value');
@@ -376,7 +526,6 @@
                 sdp: answer.sdp
             });
             
-            // Listen for ICE candidates from initiator
             database.ref(`rooms/${roomId}/candidates/initiator`).on('child_added', snapshot => {
                 const candidate = snapshot.val();
                 if (candidate) {
@@ -426,15 +575,26 @@
         };
 
         document.getElementById('micBtn').onclick = () => {
-            isMicMuted = !isMicMuted;
-            localStream.getAudioTracks()[0].enabled = !isMicMuted;
-            document.getElementById('micIcon').textContent = isMicMuted ? '🔇' : '🎤';
+            if (localStream) {
+                const audioTrack = localStream.getAudioTracks()[0];
+                if (audioTrack) {
+                    isMicMuted = !isMicMuted;
+                    audioTrack.enabled = !isMicMuted;
+                    document.getElementById('micIcon').textContent = isMicMuted ? '🔇' : '🎤';
+                }
+            }
         };
 
         document.getElementById('cameraBtn').onclick = () => {
-            isCameraOff = !isCameraOff;
-            localStream.getVideoTracks()[0].enabled = !isCameraOff;
-            document.getElementById('cameraIcon').textContent = isCameraOff ? '📷' : '📹';
+            if (localStream && !audioOnlyMode) {
+                const videoTrack = localStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    isCameraOff = !isCameraOff;
+                    videoTrack.enabled = !isCameraOff;
+                    document.getElementById('cameraIcon').textContent = isCameraOff ? '📷' : '📹';
+                    localVideo.style.display = isCameraOff ? 'none' : 'block';
+                }
+            }
         };
 
         document.getElementById('screenShareBtn').onclick = toggleScreenShare;
@@ -450,7 +610,7 @@
         document.getElementById('endCallBtn').onclick = () => {
             if (peerConnection) peerConnection.close();
             if (localStream) localStream.getTracks().forEach(track => track.stop());
-            database.ref(`rooms/${roomId}`).remove();
+            if (roomId) database.ref(`rooms/${roomId}`).remove();
             window.location.reload();
         };
 
@@ -463,7 +623,33 @@
             document.body.classList.toggle('light');
         };
 
-        // ==================== AUTO-JOIN FROM URL ====================
+        // Error modal handlers
+        document.getElementById('retryBtn').onclick = () => {
+            hideError();
+            audioOnlyMode = false;
+            if (pendingRoomAction === 'create') {
+                createRoom();
+            } else if (pendingRoomAction && pendingRoomAction.type === 'join') {
+                joinRoom(pendingRoomAction.roomId);
+            }
+        };
+
+        document.getElementById('audioOnlyBtn').onclick = () => {
+            hideError();
+            audioOnlyMode = true;
+            if (pendingRoomAction === 'create') {
+                createRoom();
+            } else if (pendingRoomAction && pendingRoomAction.type === 'join') {
+                joinRoom(pendingRoomAction.roomId);
+            }
+        };
+
+        document.getElementById('closeErrorBtn').onclick = () => {
+            hideError();
+            pendingRoomAction = null;
+        };
+
+        // Auto-join from URL
         window.onload = () => {
             const hash = window.location.hash.substring(1);
             if (hash) {
