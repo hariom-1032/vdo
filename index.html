@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ConnectNow - Free Video Calls</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .video-container { position: relative; width: 100%; height: 100vh; background: #000; }
+        #remoteVideo { width: 100%; height: 100%; object-fit: cover; }
+        #localVideo { position: absolute; bottom: 20px; right: 20px; width: 200px; height: 150px; 
+                      border-radius: 12px; object-fit: cover; border: 3px solid #fff; 
+                      box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 10; }
+        @media (max-width: 640px) {
+            #localVideo { width: 120px; height: 90px; bottom: 80px; right: 10px; }
+        }
+        .controls { position: absolute; bottom: 0; left: 0; right: 0; padding: 20px;
+                    background: linear-gradient(transparent, rgba(0,0,0,0.8)); z-index: 20; }
+        .btn { width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center;
+               justify-content: center; cursor: pointer; transition: all 0.3s; border: none; }
+        .btn:hover { transform: scale(1.1); }
+        .btn:active { transform: scale(0.95); }
+        .chat-box { position: absolute; right: 20px; top: 20px; width: 300px; max-height: 400px;
+                    background: rgba(0,0,0,0.85); border-radius: 12px; overflow: hidden; z-index: 15; }
+        .dark { background: #1a1a1a; color: #fff; }
+        .light { background: #f9fafb; color: #111; }
+        @media (max-width: 640px) {
+            .chat-box { width: calc(100% - 40px); max-height: 300px; }
+        }
+    </style>
+</head>
+<body class="light">
+    <!-- Landing Page -->
+    <div id="landingPage" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600">
+        <div class="text-center px-4">
+            <h1 class="text-6xl font-bold text-white mb-4">ConnectNow</h1>
+            <p class="text-xl text-white/90 mb-8">Free, secure 1:1 video calls in your browser</p>
+            <button id="createCallBtn" class="bg-white text-purple-600 px-8 py-4 rounded-full text-lg font-semibold hover:bg-gray-100 transition shadow-lg">
+                Create a Call
+            </button>
+            <div id="joinSection" class="mt-8 hidden">
+                <input id="roomIdInput" type="text" placeholder="Enter Room ID" 
+                       class="px-4 py-3 rounded-full w-80 max-w-full text-center text-gray-800 mb-4">
+                <button id="joinCallBtn" class="bg-green-500 text-white px-8 py-3 rounded-full font-semibold hover:bg-green-600 transition">
+                    Join Call
+                </button>
+            </div>
+            <button id="themeToggle" class="mt-8 text-white/80 hover:text-white transition">
+                🌙 Toggle Theme
+            </button>
+        </div>
+    </div>
+
+    <!-- Call Page -->
+    <div id="callPage" class="hidden">
+        <div class="video-container">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <video id="localVideo" autoplay playsinline muted></video>
+            
+            <!-- Connection Status -->
+            <div class="absolute top-4 left-4 z-20">
+                <div id="connectionStatus" class="bg-orange-500 text-white px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2">
+                    <span class="w-3 h-3 rounded-full bg-white animate-pulse"></span>
+                    <span>Connecting...</span>
+                </div>
+                <div id="roomInfo" class="mt-2 bg-black/70 text-white px-4 py-2 rounded-lg text-sm">
+                    <div class="font-semibold">Room ID:</div>
+                    <div id="roomIdDisplay" class="flex items-center gap-2 mt-1">
+                        <span id="roomIdText" class="text-xs"></span>
+                        <button id="copyRoomBtn" class="bg-blue-500 px-2 py-1 rounded text-xs hover:bg-blue-600">Copy Link</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Box -->
+            <div id="chatBox" class="chat-box hidden">
+                <div class="p-3 border-b border-gray-700">
+                    <div class="flex justify-between items-center">
+                        <span class="font-semibold">Chat</span>
+                        <button id="closeChatBtn" class="text-gray-400 hover:text-white">✕</button>
+                    </div>
+                </div>
+                <div id="messages" class="h-64 overflow-y-auto p-3 space-y-2"></div>
+                <div class="p-3 border-t border-gray-700">
+                    <input id="chatInput" type="text" placeholder="Type a message..." 
+                           class="w-full bg-gray-800 text-white px-3 py-2 rounded-lg text-sm">
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="controls">
+                <div class="flex justify-center items-center gap-4 flex-wrap">
+                    <button id="micBtn" class="btn bg-gray-700 hover:bg-gray-600 text-white">
+                        <span id="micIcon">🎤</span>
+                    </button>
+                    <button id="cameraBtn" class="btn bg-gray-700 hover:bg-gray-600 text-white">
+                        <span id="cameraIcon">📹</span>
+                    </button>
+                    <button id="screenShareBtn" class="btn bg-blue-600 hover:bg-blue-500 text-white">
+                        <span>🖥️</span>
+                    </button>
+                    <button id="chatBtn" class="btn bg-green-600 hover:bg-green-500 text-white">
+                        <span>💬</span>
+                    </button>
+                    <button id="endCallBtn" class="btn bg-red-600 hover:bg-red-500 text-white">
+                        <span>📞</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== CONFIGURATION ====================
+        // Firebase configuration (FREE tier - replace with your own)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDemO-9qW5Iv4MF7SnXxJdqT7VQZCJCpvw",
+            authDomain: "webrtc-demo-12345.firebaseapp.com",
+            databaseURL: "https://webrtc-demo-12345-default-rtdb.firebaseio.com",
+            projectId: "webrtc-demo-12345",
+            storageBucket: "webrtc-demo-12345.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef123456"
+        };
+
+        // WebRTC STUN/TURN servers (all FREE public servers)
+        const iceServers = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun.relay.metered.ca:80' },
+            {
+                urls: 'turn:openrelay.metered.ca:80',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            }
+        ];
+
+        // ==================== INITIALIZATION ====================
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        
+        let localStream = null;
+        let remoteStream = null;
+        let peerConnection = null;
+        let roomId = null;
+        let isInitiator = false;
+        let localDataChannel = null;
+        let isMicMuted = false;
+        let isCameraOff = false;
+        let isScreenSharing = false;
+
+        // DOM elements
+        const landingPage = document.getElementById('landingPage');
+        const callPage = document.getElementById('callPage');
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const roomIdDisplay = document.getElementById('roomIdText');
+        const chatBox = document.getElementById('chatBox');
+        const messages = document.getElementById('messages');
+        const chatInput = document.getElementById('chatInput');
+
+        // ==================== UTILITY FUNCTIONS ====================
+        function generateRoomId() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        function updateConnectionStatus(status, color) {
+            connectionStatus.innerHTML = `
+                <span class="w-3 h-3 rounded-full bg-white ${status === 'Connecting...' ? 'animate-pulse' : ''}"></span>
+                <span>${status}</span>
+            `;
+            connectionStatus.className = `bg-${color}-500 text-white px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2`;
+        }
+
+        function showNotification(message, type = 'info') {
+            const notif = document.createElement('div');
+            notif.className = `fixed top-4 right-4 z-50 px-6 py-3 rounded-lg text-white font-semibold shadow-lg ${
+                type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500'
+            }`;
+            notif.textContent = message;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 3000);
+        }
+
+        // ==================== MEDIA HANDLING ====================
+        async function initializeMedia() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: { echoCancellation: true, noiseSuppression: true }
+                });
+                localVideo.srcObject = localStream;
+                showNotification('Camera and microphone ready', 'success');
+                return true;
+            } catch (error) {
+                console.error('Error accessing media devices:', error);
+                showNotification('Could not access camera/microphone', 'error');
+                return false;
+            }
+        }
+
+        async function toggleScreenShare() {
+            if (isScreenSharing) {
+                // Stop screen sharing, return to camera
+                const videoTrack = localStream.getVideoTracks()[0];
+                const sender = peerConnection.getSenders().find(s => s.track.kind === 'video');
+                
+                const cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                const cameraTrack = cameraStream.getVideoTracks()[0];
+                
+                sender.replaceTrack(cameraTrack);
+                localVideo.srcObject.getVideoTracks()[0].stop();
+                localVideo.srcObject.removeTrack(videoTrack);
+                localVideo.srcObject.addTrack(cameraTrack);
+                
+                isScreenSharing = false;
+                showNotification('Stopped screen sharing', 'info');
+            } else {
+                try {
+                    const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                    const screenTrack = screenStream.getVideoTracks()[0];
+                    const sender = peerConnection.getSenders().find(s => s.track.kind === 'video');
+                    
+                    sender.replaceTrack(screenTrack);
+                    
+                    screenTrack.onended = () => toggleScreenShare();
+                    isScreenSharing = true;
+                    showNotification('Screen sharing started', 'success');
+                } catch (error) {
+                    console.error('Screen share error:', error);
+                    showNotification('Could not start screen sharing', 'error');
+                }
+            }
+        }
+
+        // ==================== WEBRTC SETUP ====================
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection({ iceServers });
+
+            // Add local tracks to peer connection
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            // Handle remote stream
+            remoteStream = new MediaStream();
+            remoteVideo.srcObject = remoteStream;
+            
+            peerConnection.ontrack = event => {
+                event.streams[0].getTracks().forEach(track => {
+                    remoteStream.addTrack(track);
+                });
+            };
+
+            // ICE candidate handling
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    database.ref(`rooms/${roomId}/candidates/${isInitiator ? 'initiator' : 'receiver'}`).push(event.candidate.toJSON());
+                }
+            };
+
+            // Connection state changes
+            peerConnection.onconnectionstatechange = () => {
+                const state = peerConnection.connectionState;
+                console.log('Connection state:', state);
+                
+                if (state === 'connected') {
+                    updateConnectionStatus('Connected', 'green');
+                } else if (state === 'connecting') {
+                    updateConnectionStatus('Connecting...', 'orange');
+                } else if (state === 'disconnected' || state === 'failed') {
+                    updateConnectionStatus('Connection failed', 'red');
+                }
+            };
+
+            // Data channel for chat
+            if (isInitiator) {
+                localDataChannel = peerConnection.createDataChannel('chat');
+                setupDataChannel(localDataChannel);
+            } else {
+                peerConnection.ondatachannel = event => {
+                    localDataChannel = event.channel;
+                    setupDataChannel(localDataChannel);
+                };
+            }
+        }
+
+        function setupDataChannel(channel) {
+            channel.onopen = () => console.log('Data channel opened');
+            channel.onmessage = event => {
+                const msg = JSON.parse(event.data);
+                displayMessage(msg.text, false);
+            };
+        }
+
+        // ==================== SIGNALING ====================
+        async function createRoom() {
+            roomId = generateRoomId();
+            isInitiator = true;
+            
+            await initializeMedia();
+            createPeerConnection();
+            
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            
+            await database.ref(`rooms/${roomId}`).set({
+                offer: {
+                    type: offer.type,
+                    sdp: offer.sdp
+                },
+                createdAt: Date.now()
+            });
+            
+            // Listen for answer
+            database.ref(`rooms/${roomId}/answer`).on('value', async snapshot => {
+                const answer = snapshot.val();
+                if (answer && !peerConnection.currentRemoteDescription) {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                }
+            });
+            
+            // Listen for ICE candidates from receiver
+            database.ref(`rooms/${roomId}/candidates/receiver`).on('child_added', snapshot => {
+                const candidate = snapshot.val();
+                if (candidate) {
+                    peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            });
+            
+            showCallPage();
+        }
+
+        async function joinRoom(rid) {
+            roomId = rid;
+            isInitiator = false;
+            
+            await initializeMedia();
+            createPeerConnection();
+            
+            const snapshot = await database.ref(`rooms/${roomId}/offer`).once('value');
+            const offer = snapshot.val();
+            
+            if (!offer) {
+                showNotification('Room not found', 'error');
+                return;
+            }
+            
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            
+            await database.ref(`rooms/${roomId}/answer`).set({
+                type: answer.type,
+                sdp: answer.sdp
+            });
+            
+            // Listen for ICE candidates from initiator
+            database.ref(`rooms/${roomId}/candidates/initiator`).on('child_added', snapshot => {
+                const candidate = snapshot.val();
+                if (candidate) {
+                    peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            });
+            
+            showCallPage();
+        }
+
+        function showCallPage() {
+            landingPage.classList.add('hidden');
+            callPage.classList.remove('hidden');
+            roomIdDisplay.textContent = roomId;
+        }
+
+        // ==================== CHAT ====================
+        function displayMessage(text, isSent) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `p-2 rounded ${isSent ? 'bg-blue-600 ml-auto' : 'bg-gray-700'} max-w-[80%] text-sm`;
+            msgDiv.textContent = text;
+            messages.appendChild(msgDiv);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function sendMessage() {
+            const text = chatInput.value.trim();
+            if (text && localDataChannel && localDataChannel.readyState === 'open') {
+                localDataChannel.send(JSON.stringify({ text }));
+                displayMessage(text, true);
+                chatInput.value = '';
+            }
+        }
+
+        // ==================== UI CONTROLS ====================
+        document.getElementById('createCallBtn').onclick = createRoom;
+        
+        document.getElementById('joinCallBtn').onclick = () => {
+            const rid = document.getElementById('roomIdInput').value.trim();
+            if (rid) joinRoom(rid);
+        };
+
+        document.getElementById('copyRoomBtn').onclick = () => {
+            const link = `${window.location.origin}${window.location.pathname}#${roomId}`;
+            navigator.clipboard.writeText(link);
+            showNotification('Link copied to clipboard!', 'success');
+        };
+
+        document.getElementById('micBtn').onclick = () => {
+            isMicMuted = !isMicMuted;
+            localStream.getAudioTracks()[0].enabled = !isMicMuted;
+            document.getElementById('micIcon').textContent = isMicMuted ? '🔇' : '🎤';
+        };
+
+        document.getElementById('cameraBtn').onclick = () => {
+            isCameraOff = !isCameraOff;
+            localStream.getVideoTracks()[0].enabled = !isCameraOff;
+            document.getElementById('cameraIcon').textContent = isCameraOff ? '📷' : '📹';
+        };
+
+        document.getElementById('screenShareBtn').onclick = toggleScreenShare;
+
+        document.getElementById('chatBtn').onclick = () => {
+            chatBox.classList.toggle('hidden');
+        };
+
+        document.getElementById('closeChatBtn').onclick = () => {
+            chatBox.classList.add('hidden');
+        };
+
+        document.getElementById('endCallBtn').onclick = () => {
+            if (peerConnection) peerConnection.close();
+            if (localStream) localStream.getTracks().forEach(track => track.stop());
+            database.ref(`rooms/${roomId}`).remove();
+            window.location.reload();
+        };
+
+        chatInput.onkeypress = e => {
+            if (e.key === 'Enter') sendMessage();
+        };
+
+        document.getElementById('themeToggle').onclick = () => {
+            document.body.classList.toggle('dark');
+            document.body.classList.toggle('light');
+        };
+
+        // ==================== AUTO-JOIN FROM URL ====================
+        window.onload = () => {
+            const hash = window.location.hash.substring(1);
+            if (hash) {
+                document.getElementById('roomIdInput').value = hash;
+                joinRoom(hash);
+            }
+        };
+    </script>
+</body>
+</html>
