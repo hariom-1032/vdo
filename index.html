@@ -264,21 +264,46 @@
         // ==================== MEDIA HANDLING ====================
         async function initializeMedia(audioOnly = false) {
             try {
+                // First check if getUserMedia is supported
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error('BROWSER_NOT_SUPPORTED');
+                }
+
                 // Check if media devices are available
-                const devices = await navigator.mediaDevices.enumerateDevices();
+                let devices = [];
+                try {
+                    devices = await navigator.mediaDevices.enumerateDevices();
+                } catch (enumError) {
+                    console.warn('Could not enumerate devices:', enumError);
+                    // Continue anyway, getUserMedia might still work
+                }
+
                 const hasAudio = devices.some(d => d.kind === 'audioinput');
                 const hasVideo = devices.some(d => d.kind === 'videoinput');
 
-                console.log('Available devices:', { hasAudio, hasVideo });
+                console.log('=== Device Detection ===');
+                console.log('All devices:', devices);
+                console.log('Has audio input:', hasAudio);
+                console.log('Has video input:', hasVideo);
+                console.log('Audio only mode requested:', audioOnly);
 
-                if (!hasAudio && !hasVideo) {
+                // If no devices detected but we're in a browser, try anyway
+                // Sometimes enumerateDevices() returns empty before permissions
+                const shouldTryAudio = hasAudio || devices.length === 0;
+                const shouldTryVideo = !audioOnly && (hasVideo || devices.length === 0);
+
+                if (!shouldTryAudio && !shouldTryVideo) {
                     throw new Error('NO_DEVICES');
                 }
 
                 // Request appropriate permissions
                 const constraints = {
-                    audio: hasAudio ? { echoCancellation: true, noiseSuppression: true } : false,
-                    video: (!audioOnly && hasVideo) ? { 
+                    audio: shouldTryAudio ? { 
+                        echoCancellation: true, 
+                        noiseSuppression: true,
+                        autoGainControl: true 
+                    } : false,
+                    video: shouldTryVideo ? { 
                         width: { ideal: 1280 }, 
                         height: { ideal: 720 },
                         facingMode: 'user'
@@ -287,13 +312,16 @@
 
                 console.log('Requesting media with constraints:', constraints);
                 
+                // Try to get user media
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 
                 // Check what we actually got
                 const audioTracks = localStream.getAudioTracks();
                 const videoTracks = localStream.getVideoTracks();
                 
-                console.log('Got tracks:', { audio: audioTracks.length, video: videoTracks.length });
+                console.log('=== Media Stream Success ===');
+                console.log('Audio tracks:', audioTracks.length, audioTracks.map(t => t.label));
+                console.log('Video tracks:', videoTracks.length, videoTracks.map(t => t.label));
 
                 if (videoTracks.length === 0) {
                     audioOnlyMode = true;
@@ -301,40 +329,59 @@
                     showNotification('Joined in audio-only mode', 'info');
                 }
 
+                if (audioTracks.length === 0 && videoTracks.length === 0) {
+                    throw new Error('NO_TRACKS');
+                }
+
                 localVideo.srcObject = localStream;
                 
-                if (audioOnlyMode) {
+                if (audioOnlyMode || videoTracks.length === 0) {
                     localVideo.style.display = 'none';
                 }
 
                 showNotification('Media ready!', 'success');
                 return true;
             } catch (error) {
-                console.error('Media error:', error);
+                console.error('=== Media Error ===');
+                console.error('Error name:', error.name);
+                console.error('Error message:', error.message);
+                console.error('Full error:', error);
                 
-                if (error.name === 'NotFoundError' || error.message === 'NO_DEVICES') {
+                if (error.message === 'BROWSER_NOT_SUPPORTED') {
+                    showError(
+                        'Browser Not Supported',
+                        'Your browser does not support video calling. Please use Chrome, Firefox, Safari, or Edge (latest version).',
+                        false
+                    );
+                } else if (error.name === 'NotFoundError' || error.message === 'NO_DEVICES' || error.message === 'NO_TRACKS') {
                     showError(
                         'No Camera or Microphone Found',
-                        'Please connect a camera or microphone and try again. You can also join with audio only if you have a microphone.',
-                        true
+                        'No input devices detected. Please:\n1. Connect a webcam or microphone\n2. Refresh the page\n3. Check device manager/system settings\n4. Try a different USB port\n5. Test in another browser',
+                        false
                     );
                 } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
                     showError(
                         'Permission Denied',
-                        'You denied access to camera/microphone. Please click the 🔒 icon in your browser\'s address bar to allow access.',
-                        true
+                        'You denied access to camera/microphone. To fix:\n1. Click the 🔒 or ⓘ icon in your browser\'s address bar\n2. Allow camera and microphone\n3. Refresh the page',
+                        false
                     );
-                } else if (error.name === 'NotReadableError') {
+                } else if (error.name === 'NotReadableError' || error.name === 'AbortError') {
                     showError(
-                        'Device In Use',
-                        'Your camera or microphone is being used by another application. Please close other apps (Zoom, Teams, etc.) and try again.',
-                        true
+                        'Device In Use or Hardware Error',
+                        'Your camera/microphone is in use or malfunctioning:\n1. Close other apps (Zoom, Teams, Skype)\n2. Restart your browser\n3. Unplug and reconnect your device\n4. Restart your computer',
+                        false
+                    );
+                } else if (error.name === 'OverconstrainedError') {
+                    showError(
+                        'Device Constraint Error',
+                        'Your camera/microphone doesn\'t meet the requirements. Try:\n1. Using a different device\n2. Refreshing the page\n3. Using a different browser',
+                        false
                     );
                 } else {
                     showError(
-                        'Media Error',
-                        `Could not access media devices: ${error.message}. Try refreshing the page or using a different browser.`,
-                        true
+                        'Media Access Error',
+                        `Could not access media devices: ${error.name} - ${error.message}\n\nTroubleshooting:\n1. Refresh the page\n2. Check browser permissions\n3. Try a different browser\n4. Check system privacy settings`,
+                        false
                     );
                 }
                 return false;
